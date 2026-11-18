@@ -55,17 +55,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Create CI environment file
+      - name: Generate CI runtime credentials
         run: |
-          cat > .env <<'EOF'
-          POSTGRES_DB=taskflow
-          POSTGRES_USER=taskflow_user
-          POSTGRES_PASSWORD=ci_test_password_123
-          DATABASE_URL=postgresql://taskflow_user:ci_test_password_123@postgres:5432/taskflow
-          REDIS_URL=redis://redis:6379
-          JWT_SECRET=ci_only_secret_change_for_real_deployment
-          PORT=3000
-          EOF
+          POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+          JWT_SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::$POSTGRES_PASSWORD"
+          echo "::add-mask::$JWT_SECRET"
+          {
+            printf 'POSTGRES_DB=taskflow\n'
+            printf 'POSTGRES_USER=taskflow_user\n'
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'JWT_SECRET=%s\n' "$JWT_SECRET"
+            printf 'PORT=3000\n'
+            printf 'REDIS_URL=redis://redis:6379\n'
+          } >> "$GITHUB_ENV"
 
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet

@@ -17,6 +17,8 @@ jobs:
     name: Publish student's images to Docker Hub
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - name: Checkout student's repository
         uses: actions/checkout@v4
@@ -25,9 +27,12 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           test -n "$DOCKERHUB_USERNAME" || (echo "Missing DOCKERHUB_USERNAME secret" && exit 1)
           test -n "$DOCKERHUB_TOKEN" || (echo "Missing DOCKERHUB_TOKEN secret" && exit 1)
+          test -n "$POSTGRES_PASSWORD" || (echo "Missing POSTGRES_PASSWORD secret" && exit 1)
+          test "$DOCKERHUB_USERNAME" = "shouryaojha" || (echo "DOCKERHUB_USERNAME must be shouryaojha" && exit 1)
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -56,20 +61,15 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-frontend:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-frontend:${{ github.sha }}
 
-      - name: Create deployment environment file
+      - name: Generate per-run JWT secret
         run: |
-          cat > .env <<'EOF'
-          POSTGRES_DB=taskflow
-          POSTGRES_USER=taskflow_user
-          POSTGRES_PASSWORD=deployment_change_me
-          DATABASE_URL=postgresql://taskflow_user:deployment_change_me@postgres:5432/taskflow
-          REDIS_URL=redis://redis:6379
-          JWT_SECRET=replace_with_a_long_random_secret
-          PORT=3000
-          DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
-          EOF
+          JWT_SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::$JWT_SECRET"
+          printf 'JWT_SECRET=%s\n' "$JWT_SECRET" >> "$GITHUB_ENV"
 
       - name: Validate image-based deployment Compose
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           grep -q 'image:' docker-compose.deploy.yml
           if grep -Eq '^[[:space:]]+build:' docker-compose.deploy.yml; then
@@ -79,12 +79,18 @@ jobs:
           docker compose -f docker-compose.deploy.yml config --quiet
 
       - name: Pull published images
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: docker compose -f docker-compose.deploy.yml pull
 
       - name: Deploy using Docker Hub images
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: docker compose -f docker-compose.deploy.yml up -d
 
       - name: Verify deployment
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           for attempt in $(seq 1 40); do
             if curl --fail --silent http://localhost:3000/health; then
@@ -122,4 +128,6 @@ jobs:
 
       - name: Cleanup deployment
         if: always()
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: docker compose -f docker-compose.deploy.yml down -v --remove-orphans || true
